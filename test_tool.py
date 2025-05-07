@@ -23,21 +23,16 @@ def check_availability(branch: str, date: str, time: str):
                 break
 
         # Check available slot
-        print(id_salon)
         check_slot_url = f"https://3sgus10dig.execute-api.ap-southeast-1.amazonaws.com/Prod/booking-view-service/api/v1/booking/book-hours-group?salonId={id_salon}&bookDate={date}&timeRequest={time}"
-        print(check_slot_url)
+
         try:
             response_slot = requests.get(check_slot_url, timeout=5)
             response_slot.raise_for_status()
-            print(response_slot)
             data_slot = json.loads(response_slot.content.decode('utf-8-sig'))
-            print("data ====", data_slot)
             list_hours = data_slot["data"]["hourGroup"]
-            date = data_slot["timeRequest"]
 
             # Tách phần giờ và phút từ chuỗi thời gian
-            time_part = date.split(' ')[0]  # Phần "13:45"
-            hour, minute = time_part.split(':')  # Lấy giờ và phút
+            hour, minute = time.split(':')  # Lấy giờ và phút
             # Định dạng lại ngày giờ
             hour = hour.lstrip("0")
             if int(minute) % 20 != 0:
@@ -127,5 +122,5 @@ def check_availability(branch: str, date: str, time: str):
 if __name__ == "__main__":
     branch = "68 Đình Phong Phú,P. Tăng Nhơn Phú B, Quận 9, TP Thủ Đức"
     date = "09-05-2025"
-    time = "12:30"
+    time = "09:30"
     check_availability(branch, date, time)

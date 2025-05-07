@@ -127,16 +127,15 @@ def check_availability(branch: str, date: str, time: str):
 
         # Check available slot
         check_slot_url = f"https://3sgus10dig.execute-api.ap-southeast-1.amazonaws.com/Prod/booking-view-service/api/v1/booking/book-hours-group?salonId={id_salon}&bookDate={date}&timeRequest={time}"
+
         try:
-            response = requests.get(url, timeout=5)
-            response.raise_for_status()
-            data = json.loads(response.content.decode('utf-8-sig'))
-            list_hours = data["data"]["hourGroup"]
-            date = data["timeRequest"]
+            response_slot = requests.get(check_slot_url, timeout=5)
+            response_slot.raise_for_status()
+            data_slot = json.loads(response_slot.content.decode('utf-8-sig'))
+            list_hours = data_slot["data"]["hourGroup"]
 
             # Tách phần giờ và phút từ chuỗi thời gian
-            time_part = date.split(' ')[0]  # Phần "13:45"
-            hour, minute = time_part.split(':')  # Lấy giờ và phút
+            hour, minute = time.split(':')  # Lấy giờ và phút
             # Định dạng lại ngày giờ
             hour = hour.lstrip("0")
             if int(minute) % 20 != 0:
@@ -155,7 +154,7 @@ def check_availability(branch: str, date: str, time: str):
             )
 
             # Kết quả trả về
-            response = {"isFree": False, "hourId": "", "subHourId": "", "nearest_free_before": None,
+            return_response= {"isFree": False, "hourId": "", "subHourId": "", "nearest_free_before": None,
                         "nearest_free_after": None}
 
             if find_hour_group:
@@ -167,9 +166,9 @@ def check_availability(branch: str, date: str, time: str):
 
                 # Kiểm tra nếu `time_matching` tồn tại và có `isFree = True`
                 if time_matching:
-                    response["isFree"] = time_matching["isFree"]
-                    response["hourId"] = time_matching["hourId"]
-                    response["subHourId"] = time_matching["subHourId"]
+                    return_response["isFree"] = time_matching["isFree"]
+                    return_response["hourId"] = time_matching["hourId"]
+                    return_response["subHourId"] = time_matching["subHourId"]
 
                     # Lấy giờ hiện tại
                     current_hour = int(hour)
@@ -203,19 +202,24 @@ def check_availability(branch: str, date: str, time: str):
                     nearest_before, nearest_after = find_nearest_free(all_hours, time_matching["hour"])
 
                     # Gán kết quả giờ gần nhất trước và sau vào response
-                    response["nearest_free_before_booked_time"] = {
+                    return_response["nearest_free_before_booked_time"] = {
                         "hourFrame": nearest_before["hourFrame"],
                         "hourId": nearest_before["hourId"],
                         "subHourId": nearest_before["subHourId"],
                     } if nearest_before else None
 
-                    response["nearest_free_after_booked_time"] = {
+                    return_response["nearest_free_after_booked_time"] = {
                         "hourFrame": nearest_after["hourFrame"],
                         "hourId": nearest_after["hourId"],
                         "subHourId": nearest_after["subHourId"],
                     } if nearest_after else None
+            if return_response["isFree"]:
+                return "Còn slot"
 
-            return response
+            else:
+                before_time = return_response["nearest_free_before_booked_time"]["hourFrame"]
+                after_time = return_response["nearest_free_after_booked_time"]["hourFrame"]
+                return f"Hết slot. Hai khung giờ gần nhất còn slot là {before_time} và {after_time}"
 
         except (requests.RequestException, json.JSONDecodeError, KeyError):
             return "Dạ xin lỗi, em không thể cung cấp thông tin này."
