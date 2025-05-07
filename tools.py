@@ -1,27 +1,32 @@
 # tools.py
 # MCP tools and prompt for haircut scheduling
-from typing import Optional
-from mcp.server.fastmcp import FastMCP
-import requests
 import json
+
+import requests
+from mcp.server.fastmcp import FastMCP
+from typing import Optional
+
 from config import BRANCH_HOURS, CITY_IDS
 from utils import generate_time_slots, euclidean_distance
 
 # Initialize appointments list
 appointments = []
 
+
 def init_mcp() -> FastMCP:
     """Initialize FastMCP server."""
     return FastMCP("haircut_scheduler")
 
+
 mcp = init_mcp()
+
 
 @mcp.prompt(name="collect_booking_info", description="Thu thập thông tin đặt lịch cắt tóc")
 def collect_booking_info(
-    user_address: Optional[str] = None,
-    date: Optional[str] = None,
-    time: Optional[str] = None,
-    phone: Optional[str] = None
+        user_address: str | None = None,
+        date: str | None = None,
+        time: str | None = None,
+        phone: str | None = None
 ) -> list[str]:
     """Collect missing booking information from the user."""
     messages = []
@@ -30,12 +35,13 @@ def collect_booking_info(
             "Dạ, hệ thống bên em có hơn 100 chi nhánh trên khắp cả nước, như Hà Nội, Hồ Chí Minh, Hải Phòng, Bình Dương, Vinh, Đồng Nai... Anh ở khu vực nào để em giúp tìm salon gần nhất"
         )
     if not date:
-        messages.append("Bạn muốn đặt lịch vào ngày nào? (Định dạng: YYYY-MM-DD)")
+        messages.append("Bạn muốn đặt lịch vào ngày nào? (Định dạng: DD_MM_YYYY)")
     if not time:
         messages.append("Bạn muốn đặt lịch vào khung giờ nào? (Định dạng: HH:MM, từ 08:00 đến 20:00)")
     if not phone:
         messages.append("Vui lòng cung cấp số điện thoại của bạn để xác nhận lịch hẹn.")
     return messages
+
 
 @mcp.tool()
 def list_branches() -> str:
@@ -52,6 +58,7 @@ def list_branches() -> str:
         )
     except (requests.RequestException, json.JSONDecodeError):
         return "Dạ xin lỗi, em không thể cung cấp thông tin này."
+
 
 @mcp.tool()
 def get_near_salon(user_address: str, city: str) -> str:
@@ -95,32 +102,139 @@ def get_near_salon(user_address: str, city: str) -> str:
     except (requests.RequestException, json.JSONDecodeError, KeyError):
         return "Dạ xin lỗi, em không thể cung cấp thông tin này."
 
-@mcp.tool()
-def check_availability(branch: str, date: str, time: str) -> list[str]:
-    """Check available time slots for a specific branch and date."""
-    if branch not in BRANCH_HOURS:
-        return [f"Không tìm thấy thông tin cho chi nhánh {branch}."]
 
-    hours = BRANCH_HOURS[branch]
-    all_slots = generate_time_slots(hours["start"], hours["end"], hours["interval"])
-    booked_slots = [
-        appt["time"] for appt in appointments
-        if appt["branch"] == branch and appt["date"] == date
-    ]
-    return [slot for slot in all_slots if slot not in booked_slots]
+@mcp.tool()
+def check_availability(branch: str, date: str, time: str):
+    """Check available time slots for a specific branch and date.
+    Args:
+            time (Optional[str]): The time of the appointment in 'HH:MM' format (e.g., 14:30). Must be between 08:00 and 20:00
+            branch (Optional[str]): The name of the salon branch
+            date (Optional[str]): The date of the appointment in DD-MM_YYYY format
+    """
+
+    # Get salon id
+    url = f"https://storage.30shine.com/web/v3/configs/get_all_salon.json?"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = json.loads(response.content.decode('utf-8-sig'))
+        all_salon = data["data"]
+        id_salon = None
+        for salon in all_salon:
+            if salon["addressNew"] == branch:
+                id_salon = salon["id"]
+                break
+
+        # Check available slot
+        check_slot_url = f"https://3sgus10dig.execute-api.ap-southeast-1.amazonaws.com/Prod/booking-view-service/api/v1/booking/book-hours-group?salonId={id_salon}&bookDate={date}&timeRequest={time}"
+        try:
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+            data = json.loads(response.content.decode('utf-8-sig'))
+            list_hours = data["data"]["hourGroup"]
+            date = data["timeRequest"]
+
+            # Tách phần giờ và phút từ chuỗi thời gian
+            time_part = date.split(' ')[0]  # Phần "13:45"
+            hour, minute = time_part.split(':')  # Lấy giờ và phút
+            # Định dạng lại ngày giờ
+            hour = hour.lstrip("0")
+            if int(minute) % 20 != 0:
+                convert_minute = (int(minute) // 20) * 20
+                if convert_minute == 0:
+                    minute = str(convert_minute) + "0"
+                else:
+                    minute = str((int(minute) // 20) * 20)
+
+            hour_minute = f"{hour}h{minute}"  # Định dạng giờ phút theo chuẩn
+
+            # Tìm nhóm giờ hiện tại
+            find_hour_group = next(
+                (hourGroup for hourGroup in list_hours if hourGroup['name'] == hour),
+                None
+            )
+
+            # Kết quả trả về
+            response = {"isFree": False, "hourId": "", "subHourId": "", "nearest_free_before": None,
+                        "nearest_free_after": None}
+
+            if find_hour_group:
+                # Tìm thời gian khớp trong nhóm giờ hiện tại
+                time_matching = next(
+                    (hour for hour in find_hour_group['hours'] if hour['hour'] == hour_minute),
+                    None
+                )
+
+                # Kiểm tra nếu `time_matching` tồn tại và có `isFree = True`
+                if time_matching:
+                    response["isFree"] = time_matching["isFree"]
+                    response["hourId"] = time_matching["hourId"]
+                    response["subHourId"] = time_matching["subHourId"]
+
+                    # Lấy giờ hiện tại
+                    current_hour = int(hour)
+
+                    def time_to_minutes(time_str):
+                        """
+                        Chuyển chuỗi giờ dạng 'hhhmm' thành số phút kể từ 00:00.
+                        """
+                        hour, minute = map(int, time_str.replace('h', ':').split(':'))
+                        return hour * 60 + minute
+
+                    # Hàm tìm giờ gần nhất trống trong danh sách
+                    def find_nearest_free(hours, target_hour):
+                        target_minutes = time_to_minutes(target_hour)
+                        before = after = None
+                        for h in hours:
+                            if h["isFree"]:
+                                current_minutes = time_to_minutes(h["hour"])
+                                if current_minutes < target_minutes:
+                                    before = h
+                                elif current_minutes > target_minutes and after is None:
+                                    after = h
+                        return before, after
+
+                    # Tìm giờ trống trong phạm vi 1 tiếng liền kề
+                    relevant_hour_groups = [
+                        group for group in list_hours
+                        if current_hour - 4 <= int(group["name"]) <= current_hour + 4
+                    ]
+                    all_hours = [hour for group in relevant_hour_groups for hour in group["hours"]]
+                    nearest_before, nearest_after = find_nearest_free(all_hours, time_matching["hour"])
+
+                    # Gán kết quả giờ gần nhất trước và sau vào response
+                    response["nearest_free_before_booked_time"] = {
+                        "hourFrame": nearest_before["hourFrame"],
+                        "hourId": nearest_before["hourId"],
+                        "subHourId": nearest_before["subHourId"],
+                    } if nearest_before else None
+
+                    response["nearest_free_after_booked_time"] = {
+                        "hourFrame": nearest_after["hourFrame"],
+                        "hourId": nearest_after["hourId"],
+                        "subHourId": nearest_after["subHourId"],
+                    } if nearest_after else None
+
+            return response
+
+        except (requests.RequestException, json.JSONDecodeError, KeyError):
+            return "Dạ xin lỗi, em không thể cung cấp thông tin này."
+    except (requests.RequestException, json.JSONDecodeError, KeyError):
+        return "Dạ xin lỗi, em không thể cung cấp thông tin này."
+
 
 @mcp.tool()
 async def book_appointment(
-    time: Optional[str] = None,
-    branch: Optional[str] = None,
-    date: Optional[str] = None,
-    phone: Optional[str] = None
+        time: Optional[str] = None,
+        branch: Optional[str] = None,
+        date: Optional[str] = None,
+        phone: Optional[str] = None
 ) -> str:
     """Book a haircut appointment.
         Args:
             time (Optional[str]): The time of the appointment in 'HH:MM' format (e.g., "14:30"). Must be between 08:00 and 20:00
             branch (Optional[str]): The name of the salon branch (e.g., "Cơ sở Hà Nội").
-            date (Optional[str]): The date of the appointment in 'YYYY-MM-DD' format (e.g., "2025-05-10").
+            date (Optional[str]): The date of the appointment in 'DD-MM_YYYY format (e.g., "10-05-2025").
             phone (Optional[str]): The user's phone number for confirming the appointment.
     """
     if not all([branch, date, time, phone]):
@@ -150,6 +264,7 @@ async def book_appointment(
         "phone": phone
     })
     return f"Đã đặt lịch thành công tại {branch} vào {date} lúc {time} cho số điện thoại {phone}."
+
 
 @mcp.tool()
 def cancel_appointment(phone: str) -> str:
